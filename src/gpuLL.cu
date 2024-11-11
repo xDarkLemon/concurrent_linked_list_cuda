@@ -450,7 +450,7 @@ void readFileOps(int *&ops, int *&opNodes, int *&opVals, int &N)
     f.close();
 }
 
-void parallelOperate()
+void parallelOperate(int n_blocks, int n_threads)
 {
 	struct timespec start, end;
 	double time_taken;
@@ -480,13 +480,8 @@ void parallelOperate()
 	cudaDeviceSynchronize();
 
 	// parallel insert and remove operations
-	// int n_blocks = opN/1024+1;
-	// int n_threads = 1024;
-	int n_blocks = 32;
-	int n_threads = 1024;
-
 	clock_gettime(CLOCK_REALTIME, &start);
-	
+
 	kernel<<<n_blocks, n_threads>>>(ops, opNodes, opVals, opN);
 	cudaDeviceSynchronize();
   	// traverse to physically delete the marked nodes (no garbage collection yet)
@@ -508,9 +503,15 @@ int main(int argc, char *argv[])
 	{
 		Demo();
 	}
+	else if (argc==3)
+	{
+		int n_blocks = atoi(argv[1]);
+		int n_threads = atoi(argv[2]);
+		parallelOperate(n_blocks, n_threads);
+	}
 	else
 	{
-		parallelOperate();
+		printf("need arguments\n");
 	}
 	return 0;
 }
