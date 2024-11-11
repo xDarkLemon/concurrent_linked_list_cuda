@@ -148,7 +148,7 @@ void readFileOps(int *&ops, int *&opNodes, int *&insertNodes, int &N)
     f.close();
 }
 
-void sequentialOperate()
+void sequentialOperate(bool debug)
 {
 	struct timespec start, end;
 	double time_taken;
@@ -163,7 +163,10 @@ void sequentialOperate()
 	// create list on cpu
 	struct node *head = listInit(Nodes, N);
 	printf("CPU Before:\n");
-	printListLen(head,0);
+	if (debug)
+		printList(head, 0);
+	else 	
+		printListLen(head,0);
 
 	// CPU sequential operate
 	clock_gettime(CLOCK_REALTIME, &start);
@@ -183,12 +186,18 @@ void sequentialOperate()
 	clock_gettime(CLOCK_REALTIME, &end);
   	time_taken = ( end.tv_sec - start.tv_sec ) * 1000000000.0 + ( end.tv_nsec - start.tv_nsec );
 	printf("CPU After:\n");
-	printListLen(head,0);
+	if (debug)
+		printList(head, 0);
+	else 	
+		printListLen(head,0);
 	printf("Time taken = %lf msec\n", time_taken/1000000.0);
 }
 
-int main()
+int main(int argc, char *argv[])
 {
-	sequentialOperate();
+	if (argc==2)
+		sequentialOperate(true);
+	else
+		sequentialOperate(false);
 	return 0;
 }
