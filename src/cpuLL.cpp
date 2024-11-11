@@ -184,7 +184,7 @@ void sequentialOperate()
   	time_taken = ( end.tv_sec - start.tv_sec ) * 1000000000.0 + ( end.tv_nsec - start.tv_nsec );
 	printf("CPU After:\n");
 	printListLen(head,0);
-  	printf("Time taken = %lf nano sec\n", time_taken);
+	printf("Time taken = %lf msec\n", time_taken/1000000.0);
 }
 
 int main()

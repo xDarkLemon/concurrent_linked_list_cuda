@@ -233,89 +233,108 @@ __global__ void listTraverse()
 	listTraverseDel();
 }
 
-__global__ void listInsert(int *ops, int *insertVals, int *insertPrevs, int N) {
-	// insert ater a certain value
-	unsigned idx = blockIdx.x * blockDim.x + threadIdx.x; 
-	if (idx<N && ops[idx]==1)
+__device__ void listInsert (int insertPrev, int insertVal) {
+	struct node *myold, *actualold;
+	struct node *prev = listSearch(insertPrev);
+	if (prev)
 	{
-		struct node *myold, *actualold;
-		struct node *prev = listSearch(insertPrevs[idx]);
-		if (prev)
-		{
 #ifdef DEBUG
-			printf("Insert Prev %d found %d\n", insertPrevs[idx], prev->data);
+		printf("Insert Prev %d found %d\n", insertPrev, prev->data);
 #endif
-			struct node *newnode = createNode(insertVals[idx]);
+		struct node *newnode = createNode(insertVal);
 
-			do {
-				myold = prev->next;  // should reload every iteration
-				newnode->next = myold;
-				actualold = (struct node *)atomicCAS((unsigned long long *)&prev->next, (unsigned long long)myold, (unsigned long long)newnode);  
-			} while (actualold != myold);
-		}
+		do {
+			myold = prev->next;  // should reload every iteration
+			newnode->next = myold;
+			actualold = (struct node *)atomicCAS((unsigned long long *)&prev->next, (unsigned long long)myold, (unsigned long long)newnode);  
+		} while (actualold != myold);
 #ifdef DEBUG
-		else printf("Insert Prev %d not found\n", insertPrevs[idx]);
+		printf("Insert %d after %d\n", newnode->data, prev->data);
 #endif
 	}
+#ifdef DEBUG
+	else printf("Insert Prev %d not found\n", insertPrev);
+#endif
 }
 
-__global__ void listRemove(int *ops, int *Vals, int N)
+__device__ void listRemove(int rmVal)
 {
-	unsigned idx = blockIdx.x * blockDim.x + threadIdx.x; 
-	if (idx<N && ops[idx]==0)
-	{
-		int val = Vals[idx];
-		struct node *prev, *cur, *succ, *actual_succ;
-		prev = cur = succ = NULL;
-		int cnt=0;
+	int val = rmVal;
+	struct node *prev, *cur, *succ, *actual_succ;
+	prev = cur = succ = NULL;
+	int cnt=0;
 
-		while(1)
+	while(1)
+	{
+		cur = listSearch(val);
+		// cur = listSearch(val, &prev);
+		if (cur==NULL || cur->data != val)
 		{
-			cur = listSearch(val);
-			// cur = listSearch(val, &prev);
-			if (cur==NULL || cur->data != val)
-			{
 #ifdef DEBUG
-				printf("Remove node %d not found\n", val);
+			printf("Remove node %d not found\n", val);
 #endif
-				break;
-			}
-			else
-			{
+			break;
+		}
+		else
+		{
 #ifdef DEBUG
-				printf("Remove node %d found %d\n", val, cur->data);
+			printf("Remove node %d found %d\n", val, cur->data);
 #endif
-				succ = cur->next;
-				if(!IS_MARKED(succ))
+			succ = cur->next;
+			if(!IS_MARKED(succ))
+			{
+				actual_succ = (struct node *)atomicCAS((unsigned long long *)&cur->next, (unsigned long long)succ, GET_MARKED_REF(succ));  // actual cur->next set as marked succ
+				if(actual_succ==succ)
 				{
-					actual_succ = (struct node *)atomicCAS((unsigned long long *)&cur->next, (unsigned long long)succ, GET_MARKED_REF(succ));  // actual cur->next set as marked succ
-					if(actual_succ==succ)
-					{
 #ifdef DEBUG
-						printf("Remove found %d\n", val);
-						printf("unmarked succ: %llu, marked succ: %llu, succ: %llu, actual succ: %llu, cur->next: %llu\n", GET_UNMARKED_REF(succ), GET_MARKED_REF(succ), (unsigned long long)succ, (unsigned long long)actual_succ, (unsigned long long)cur->next);
+					printf("Remove found %d\n", val);
+					printf("unmarked succ: %llu, marked succ: %llu, succ: %llu, actual succ: %llu, cur->next: %llu\n", GET_UNMARKED_REF(succ), GET_MARKED_REF(succ), (unsigned long long)succ, (unsigned long long)actual_succ, (unsigned long long)cur->next);
 #endif
-						break;
-					}
+					break;
 				}
 			}
 		}
+	}
 
-		// try to delete physically, envoke search(succ)
-		// slows down too much, use listTraverseDel instead. good for demo.
+	// try to delete physically, envoke search(succ)
+	// slows down too much, use listTraverseDel instead. good for demo.
 /*
-		struct node *actual_prev_next = (struct node*)atomicCAS((unsigned long long *)&prev->next, (unsigned long long)cur, GET_UNMARKED_REF(succ));
-		if (actual_prev_next!=cur)
-		{
+	struct node *actual_prev_next = (struct node*)atomicCAS((unsigned long long *)&prev->next, (unsigned long long)cur, GET_UNMARKED_REF(succ));
+	if (actual_prev_next!=cur)
+	{
 #ifdef DEBUG
-			printf("Physically delete in remove, call listSearch\n");
+		printf("Physically delete in remove, call listSearch\n");
 #endif
-			// listSearch(succ->data, &cur);
-		}
+		// listSearch(succ->data, &cur);
+	}
 #ifdef DEBUG
-		else printf("Physically delete in remove\n");
+	else printf("Physically delete in remove\n");
 #endif
 */
+}
+
+__global__ void kernel(int *ops, int *opVals, int *opNodes, int N) {
+	// need to iteratively process all N. one threads need to process more than once
+	int i=0;
+	int idx =  i * gridDim.x * blockDim.x + blockIdx.x * blockDim.x + threadIdx.x; 
+	while (idx < N)
+	{
+#ifdef DEBUG
+		printf("idx: %d\n", idx);
+#endif
+		if (idx<N && ops[idx]==1)  // insert
+		{
+			listInsert(opNodes[idx], opVals[idx]);
+		}
+		else if (idx<N && ops[idx]==0)  // delete
+		{
+			listRemove(opVals[idx]);
+		}
+		i++;
+		idx = i * gridDim.x * blockDim.x + blockIdx.x * blockDim.x + threadIdx.x; 
+#ifdef DEBUG
+		printf("next idx: %d\n", idx);
+#endif
 	}
 }
 
@@ -329,55 +348,42 @@ void Demo() {
 	listPrint<<<1, 1>>>();
 	cudaDeviceSynchronize();
 
-	// generate insert operation data
-	int in_ops_h[5] = {1,1,1,1,1};
-	int *in_ops;
-	cudaMalloc((void**)&in_ops, sizeof(int)*5);
-	cudaMemcpy(in_ops, in_ops_h, sizeof(int)*5, cudaMemcpyHostToDevice);
+	// generate operation data
+	int ops_h[8] = {1,1,1,1,1,0,0,0};
+	int *ops;
+	cudaMalloc((void**)&ops, sizeof(int)*8);
+	cudaMemcpy(ops, ops_h, sizeof(int)*8, cudaMemcpyHostToDevice);
 
-	int *insert_h = (int *)malloc(sizeof(int)*5);
-	insert_h[0]=50;
-	insert_h[1]=60;
-	insert_h[2]=70;
-	insert_h[3]=80;
-	insert_h[4]=90;
-	int *insert_d;
-	cudaMalloc((void **)&insert_d, sizeof(int)*5);
-	cudaMemcpy(insert_d, insert_h, sizeof(int)*5, cudaMemcpyHostToDevice);
+	int *opVal_h = (int *)malloc(sizeof(int)*8);
+	opVal_h[0]=50;
+	opVal_h[1]=60;
+	opVal_h[2]=70;
+	opVal_h[3]=80;
+	opVal_h[4]=90;
+	opVal_h[5]=1;
+	opVal_h[6]=80;
+	opVal_h[7]=70;
 
-	int *prev_h = (int *)malloc(sizeof(int)*5);
-	prev_h[0]=2;
-	prev_h[1]=2;
-	prev_h[2]=2;
-	prev_h[3]=1;
-	prev_h[4]=3;
-	int *prev_d;
-	cudaMalloc((void **)&prev_d, sizeof(int)*5); 
-	cudaMemcpy(prev_d, prev_h, sizeof(int)*5, cudaMemcpyHostToDevice);
-	
-	// generate remove operation data
-	int *rm_ops;
-	cudaMalloc((void**)&rm_ops, sizeof(int)*3);
-	cudaMemset(rm_ops, 0, sizeof(int)*3);
+	int *opVal_d;
+	cudaMalloc((void **)&opVal_d, sizeof(int)*8);
+	cudaMemcpy(opVal_d, opVal_h, sizeof(int)*8, cudaMemcpyHostToDevice);
 
-	int *rm_h = (int *)malloc(sizeof(int)*3);
-	rm_h[0]=1;
-	rm_h[1]=80;
-	rm_h[2]=70;
-	int *rm_d;
-	cudaMalloc((void **)&rm_d, sizeof(int)*3); 
-	cudaMemcpy(rm_d, rm_h, sizeof(int)*3, cudaMemcpyHostToDevice);
-	
-	// test insert
-	printf("\nlistInsert\n");
-	listInsert<<<4, 4>>>(in_ops, insert_d, prev_d, 5);
-	cudaDeviceSynchronize();
-	listPrint<<<1, 1>>>();
-	cudaDeviceSynchronize();
-	
-	// test remove
-	printf("\nlistRemove\n");
-	listRemove<<<4, 4>>>(rm_ops, rm_d, 3);
+	int *opNode_h = (int *)malloc(sizeof(int)*8);
+	opNode_h[0]=2;
+	opNode_h[1]=2;
+	opNode_h[2]=2;
+	opNode_h[3]=1;
+	opNode_h[4]=3;
+	opNode_h[5]=0;
+	opNode_h[6]=0;
+	opNode_h[7]=0;
+
+	int *opNode_d;
+	cudaMalloc((void **)&opNode_d, sizeof(int)*8); 
+	cudaMemcpy(opNode_d, opNode_h, sizeof(int)*8, cudaMemcpyHostToDevice);
+
+	int n_blocks = 1, n_threads = 1;
+	kernel<<<n_blocks, n_threads>>>(ops, opVal_d, opNode_d, 8);
 	cudaDeviceSynchronize();  // necessary!
 	listPrintRaw<<<1, 1>>>();
 	cudaDeviceSynchronize();
@@ -413,7 +419,7 @@ void readFileNodes(int *&Nodes, int &N)
     f.close();
 }
 
-void readFileOps(int *&ops, int *&opNodes, int *&insertNodes, int &N)
+void readFileOps(int *&ops, int *&opNodes, int *&opVals, int &N)
 {
     ifstream f;
     f.open("../data/operations.txt");
@@ -423,8 +429,8 @@ void readFileOps(int *&ops, int *&opNodes, int *&insertNodes, int &N)
         printf("Read From File Operations: %d\n",N);
         ops = (int *)malloc(sizeof(int)*N);
         opNodes = (int *)malloc(sizeof(int)*N);
-        insertNodes = (int *)malloc(sizeof(int)*N);
-        memset(insertNodes, 0, sizeof(int)*N);
+        opVals = (int *)malloc(sizeof(int)*N);
+        memset(opVals, 0, sizeof(int)*N);
         int i=0;
         while(!f.eof())
         {
@@ -432,8 +438,12 @@ void readFileOps(int *&ops, int *&opNodes, int *&insertNodes, int &N)
             f >> opNodes[i];
             if(ops[i]==1)
             {
-                f >> insertNodes[i];
+                f >> opVals[i];
             }
+			else
+			{
+				opVals[i] = -99;  // delete operation does not have opVal
+			}
             i++;
         }
     }
@@ -449,19 +459,19 @@ void parallelOperate()
 	int *Nodes_h, N;
 	readFileNodes(Nodes_h, N);
 	// read operation file
-	int *ops_h, *opNodes_h, *insertNodes_h, opN;
-	readFileOps(ops_h, opNodes_h, insertNodes_h, opN);
+	int *ops_h, *opNodes_h, *opVals_h, opN;
+	readFileOps(ops_h, opNodes_h, opVals_h, opN);
 	
 	// move data to gpu
-	int *Nodes, *ops, *opNodes, *insertNodes;
+	int *Nodes, *ops, *opNodes, *opVals;
 	cudaMalloc((void**)&Nodes, sizeof(int)*N);
 	cudaMalloc((void**)&ops, sizeof(int)*opN);
 	cudaMalloc((void**)&opNodes, sizeof(int)*opN);
-	cudaMalloc((void**)&insertNodes, sizeof(int)*opN);
+	cudaMalloc((void**)&opVals, sizeof(int)*opN);
 	cudaMemcpy(Nodes,Nodes_h,sizeof(int)*N,cudaMemcpyHostToDevice);
 	cudaMemcpy(ops,ops_h,sizeof(int)*opN,cudaMemcpyHostToDevice);
 	cudaMemcpy(opNodes,opNodes_h,sizeof(int)*opN,cudaMemcpyHostToDevice);
-	cudaMemcpy(insertNodes,insertNodes_h,sizeof(int)*opN,cudaMemcpyHostToDevice);
+	cudaMemcpy(opVals,opVals_h,sizeof(int)*opN,cudaMemcpyHostToDevice);
 
 	// init list
 	listInit<<<1,1>>>();
@@ -470,12 +480,14 @@ void parallelOperate()
 	cudaDeviceSynchronize();
 
 	// parallel insert and remove operations
-	int n_blocks = opN/1024+1;
+	// int n_blocks = opN/1024+1;
+	// int n_threads = 1024;
+	int n_blocks = 32;
+	int n_threads = 1024;
 
 	clock_gettime(CLOCK_REALTIME, &start);
 	
-	listInsert<<<n_blocks, 1024>>>(ops, insertNodes, opNodes, opN);
-	listRemove<<<n_blocks, 1024>>>(ops, opNodes, opN);
+	kernel<<<n_blocks, n_threads>>>(ops, opNodes, opVals, opN);
 	cudaDeviceSynchronize();
   	// traverse to physically delete the marked nodes (no garbage collection yet)
   	listTraverse<<<1,1>>>();
@@ -487,7 +499,7 @@ void parallelOperate()
 	listPrintLen<<<1, 1>>>();
 	cudaDeviceSynchronize();
 
-  	printf("Time taken = %lf nano sec\n", time_taken);
+  	printf("Time taken = %lf msec\n", time_taken/1000000.0);
 }
 
 int main(int argc, char *argv[])
